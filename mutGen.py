@@ -33,8 +33,17 @@ class PDBParser:
             'y': float(line[38:46].strip()),
             'z': float(line[46:54].strip()),
             'occupancy': 0.00,
-            'bfactor': 0.00
+            'bfactor': 0.00,
+            'atom_type': str(line[66:].strip())
         }
+        if atom_data['atom_type'] == '':
+            if atom_data['residue_name'] in ligands: atom_data['record_name'] = 'HETATM'
+            if atom_data['residue_name'] in ions: atom_data['record_name'] = 'HETATM'
+            if atom_data['atom_name'][0] == 'N': atom_data['atom_type'] = 'N'
+            if atom_data['atom_name'][0] == 'C': atom_data['atom_type'] = 'C'
+            if atom_data['atom_name'][0] == 'O': atom_data['atom_type'] = 'O'
+            if atom_data['atom_name'][0] == 'S': atom_data['atom_type'] = 'S'
+            if atom_data['atom_name'][0] == 'H': atom_data['atom_type'] = 'H'
         return atom_data
 
     def get_atoms(self):
@@ -81,6 +90,14 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     # ------------------------------------
     print_infos(message=f'{os.path.basename(pdb)}', type='structure')
 
+    # cria diretório para outputs
+    # ---------------------------
+    output_name = os.path.basename(pdb[:-4]).lower()
+    output_dir = f'{output_dir}/outputs/{output_name}'
+
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+
     # verifica se as cadeias de partner1 e partner2 estão no pdb
     # ----------------------------------------------------------
     chains = find_chains(pdb)
@@ -113,14 +130,17 @@ def pre_processing(pdb, partner1, partner2, output_dir):
                 _partner1.append(atom)
         
         if partner2 in ligands:
-            if atom['residue_name'] in partner2:
+            add_hydrogens_to_lig = True
+            if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM':
                 if atom['residue_model'] in ['A', '']:
                     _partner2.append(atom)
         else:
             if atom['chain_id'] in partner2 and atom['record_name'] == 'ATOM':
                 if atom['residue_model'] in ['A', '']:
                     _partner2.append(atom)
-    
+
+    # busca por ions na estrutura
+    # ---------------------------
     for atom in _atoms:
         if atom['chain_id'] in partner1 and atom['record_name'] == 'HETATM':
             if atom['residue_name'] in ions:
@@ -128,7 +148,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
         if atom['chain_id'] in partner2 and atom['record_name'] == 'HETATM':
             if atom['residue_name'] in ions:
                 _ions2.append(atom)
-    
+    print_infos(message=f'{len(_ions1) + len(_ions2)} ions found.', type='info')
     partners = _partner1 + _ions1 + _partner2 + _ions2
     
     # verifica se existem gaps na estrutura de 'partner1' e 'partner2'
@@ -143,27 +163,14 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     else:
         print_infos(message=f'{ngaps} gap(s)', type='info')
 
-    # cria diretório para outputs
-    # ---------------------------
-    output_name = os.path.basename(pdb[:-4]).lower()
-    output_dir = f'{output_dir}/outputs/{output_name}'
-
-    if not os.path.isdir(output_dir):
-        os.makedirs(output_dir)
-
     # se não existir parâmetros de mutação, ativa o reconhecimento automático de resíduos na 
     # interface e cria arquivo c/ os parâmetros de mutação
     # --------------------------------------------------------------------------------------
     if mutant_list is None:
         print_infos(message=f'enabling automatic recognition of interface residues', type='info')
-
+        interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
         # ---
-        print_infos(message=f'looking for partner1 residues near partner2', type='info')
         if partner2 in ligands:
-            interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
-        else:
-            interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
-            print_infos(message=f'looking for partner2 residues near partner1', type='info')
             interface2 = find_atoms_closest_to_protein(_partner1, _partner2, dist_cutoff=int_dist_cutoff)
 
         # escreve arquivo com parâmetros de mutação
@@ -267,7 +274,7 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
         
         # renumera os resíduos da estrutura (primeiro resíduo = 1)
         # obs.: este passo é necessário para modelagem das ligações dissulfeto no tleap
-        _pdb = renumber_residues(pdb, outfile=f'{prefix}_00_renum.pdb')
+        _pdb = renumber_residues(pdb, outfile=f'{prefix}_00.pdb')
         
         # atualiza a variável '_atoms' com a estrutura que contém os resíduos renumerados
         pdb_parser = PDBParser(_pdb)
@@ -279,15 +286,9 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
         for atom in _atoms:
             coords.append(atom)
         _pdb = write_pdb(coords, outfile=f'{prefix}_01.pdb')
-        
-        # mostra o nome da estrutura na tela
-        print_infos(message=f'{os.path.basename(_pdb)}', type='structure')
-        
-        # realiza busca por ligações dissulfeto e cria um novo arquivo .pdb (tleap like)
+                
+        # realiza busca por ligações dissulfeto e cria um novo arquivo .pdb
         _pdb, disulfides = find_disulfides(_pdb, outfile=f'{prefix}_02.pdb')
-        print_infos(message=f'{len(disulfides)} disulfide bond(s) found', type='info')
-
-        # determina a carga líquida da proteína e escreve um novo arquivo .pdb
         conf = f'{prefix}_leap.conf'
         conf = write_tleap_conf(_pdb, conf, disulfides)
         subprocess.run(f"tleap -f {conf} > {prefix}_leap.log", stdout=subprocess.PIPE, shell=True)
@@ -324,7 +325,7 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                 if atom['atom_index'] in seen_indices:
                     continue
                 else:
-                    if atom['atom_name'] == 'N':
+                    if atom['atom_name'] == 'N' or atom['residue_name'] in ions:
                         count += 1
                     if count <= endat - 1:
                         resnum = ref[cur_chain][count]
@@ -333,9 +334,14 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                         seen_indices.add(atom['atom_index'])
                     else:
                         break
-        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_{str_partner1}_{str_partner2}_final.pdb')
+        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_{str_partner1}_{str_partner2}_03.pdb')
         write_resids(_atoms, outfile=f'{prefix}.resids.txt')
         pdbs.append(_pdb)
+
+        # mostra total de ligações dissulfeto na tela
+        if _pdb.__contains__('wt'):
+            print_infos(message=f'{len(disulfides)} disulfide bond(s) found', type='info')
+
     return pdbs
 
 def aminoacids1(resname):
@@ -428,7 +434,8 @@ def write_pdb(partners, outfile):
                 f"{atom['chain_id']:1s}"
                 f"{atom['residue_number']:4d}    "
                 f"{atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}"
-                f"{atom['occupancy']:6.2f}{atom['bfactor']:6.2f}           \n"
+                f"{atom['occupancy']:6.2f}{atom['bfactor']:6.2f}           "
+                f"{atom['atom_type']}\n"
                 )
     return outfile
 
@@ -438,7 +445,10 @@ def renumber_residues(pdb, outfile):
     _atoms = pdb_parser.get_atoms()
     count = 0
     for atom in _atoms:
-        if atom['atom_name'] == 'N':
+        if atom['atom_name'] == 'N' \
+        or atom['residue_name'] in partner2 \
+        or atom['residue_name'] in ligands \
+        or atom['residue_name'] in ions:
             count += 1
         atom['residue_number'] = count
     write_pdb(_atoms, outfile)
@@ -565,7 +575,7 @@ def print_infos(message, type):
 def header():
     print('')
     print(' =============================================')
-    print('           mutgen - Mutant Generator          ')
+    print('           MutGen - Mutant Generator          ')
     print('')   
     print('  Author: Chaves, EJF')
     print(' Contact: chavesejf@gmail.com')
@@ -613,6 +623,7 @@ if (__name__ == "__main__"):
     gap_dist_cutoff  = 16
     backbone         = ['N', 'CA', 'C', 'O']
     ions             = ['MG','CA','NA','CL','FE','K','ZN','MN']
+    separate_chains  = True
 
     # pré-processamento
     # =================
