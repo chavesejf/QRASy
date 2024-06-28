@@ -101,7 +101,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     # verifica se as cadeias de partner1 e partner2 estão no pdb
     # ----------------------------------------------------------
     chains = find_chains(pdb)
-    count  = 0
+    count = 0
     for chain in chains:
         if chain in partner1:
             count += 1
@@ -122,13 +122,13 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     # ----------------------------------------------------------------------------------------
     _partner1 = []
     _partner2 = []
-    _ions1    = []
-    _ions2    = []
+    _ions1 = []
+    _ions2 = []
     for atom in _atoms:
         if atom['chain_id'] in partner1 and atom['record_name'] == 'ATOM':
             if atom['residue_model'] in ['A', '']:
                 _partner1.append(atom)
-        
+    
         if partner2 in ligands:
             add_hydrogens_to_lig = True
             if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM':
@@ -149,8 +149,21 @@ def pre_processing(pdb, partner1, partner2, output_dir):
             if atom['residue_name'] in ions:
                 _ions2.append(atom)
     print_infos(message=f'{len(_ions1) + len(_ions2)} ions found.', type='info')
-    partners = _partner1 + _ions1 + _partner2 + _ions2
     
+    # adiciona hidrogênios no ligante
+    # -------------------------------
+    if add_hydrogens_to_lig is True:
+        ligand  = f"{output_dir}/{output_name}_lig.pdb"
+        ligandH = f"{output_dir}/{output_name}_lig_withH.pdb"
+        write_pdb(_partner2, outfile=f'{ligand}')
+        subprocess.run(f'obabel -ipdb {ligand} -opdb -O {ligandH} -p > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
+        pdb_parser = PDBParser(ligandH)
+        pdb_parser.parse()
+        _partner2 = pdb_parser.get_atoms()
+
+    # ---
+    partners = _partner1 + _ions1 + _partner2 + _ions2
+
     # verifica se existem gaps na estrutura de 'partner1' e 'partner2'
     # ----------------------------------------------------------------
     ngaps, igaps = find_gaps(partners)
@@ -169,6 +182,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     if mutant_list is None:
         print_infos(message=f'enabling automatic recognition of interface residues', type='info')
         interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
+        
         # ---
         if partner2 in ligands:
             interface2 = find_atoms_closest_to_protein(_partner1, _partner2, dist_cutoff=int_dist_cutoff)
@@ -325,7 +339,9 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                 if atom['atom_index'] in seen_indices:
                     continue
                 else:
-                    if atom['atom_name'] == 'N' or atom['residue_name'] in ions:
+                    if atom['atom_name'] == 'N' \
+                    or atom['residue_name'] in ions \
+                    or atom['residue_name'] in ligands:
                         count += 1
                     if count <= endat - 1:
                         resnum = ref[cur_chain][count]
@@ -334,8 +350,8 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                         seen_indices.add(atom['atom_index'])
                     else:
                         break
-        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_{str_partner1}_{str_partner2}_03.pdb')
-        write_resids(_atoms, outfile=f'{prefix}.resids.txt')
+        
+        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_03.pdb')
         pdbs.append(_pdb)
 
         # mostra total de ligações dissulfeto na tela
@@ -411,10 +427,10 @@ def write_tleap_conf(pdb, conf, disulfides):
 def write_resids(partners, outfile):
     with open(outfile, 'w') as f:
         for atom in partners:
-            if atom['record_name'] == 'ATOM' and atom['atom_name'] == 'CA':
+            if atom['record_name'] == 'ATOM'   and atom['atom_name'] == 'CA':
                 resname = atom['residue_name']
-                chain   = atom['chain_id']
                 resnum  = atom['residue_number']
+                chain   = atom['chain_id']
                 f.write(f'{resname} {chain} {resnum}\n')
     return outfile
 
@@ -423,7 +439,9 @@ def write_pdb(partners, outfile):
         chain_id = partners[0]['chain_id']
         for atom in partners:
             cur_chain = atom['chain_id']
-            if chain_id != cur_chain:
+            if atom['residue_name'] in ions:
+                f.write('TER\n')
+            elif chain_id != cur_chain:
                 f.write('TER\n')
                 chain_id = cur_chain
             f.write(
@@ -445,10 +463,9 @@ def renumber_residues(pdb, outfile):
     _atoms = pdb_parser.get_atoms()
     count = 0
     for atom in _atoms:
-        if atom['atom_name'] == 'N' \
-        or atom['residue_name'] in partner2 \
-        or atom['residue_name'] in ligands \
-        or atom['residue_name'] in ions:
+        if atom['atom_name'] == 'N':
+            count += 1
+        if atom['record_name'] == 'HETATM' and atom['residue_name'] in ions:
             count += 1
         atom['residue_number'] = count
     write_pdb(_atoms, outfile)
@@ -633,7 +650,7 @@ if (__name__ == "__main__"):
     wild_type, pdbs, wt_resids = pre_processing(pdb_file, partner1, partner2, output_dir)
     
     # pós-processamento
-    # ===============================
+    # =================
     if len(wild_type) == 1 and len(pdbs) > 0:
         wild_type = post_processing(wild_type, partner1, partner2, wt_resids)
         pdbs = post_processing(pdbs, partner1, partner2, wt_resids)
