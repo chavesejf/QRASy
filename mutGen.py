@@ -9,7 +9,7 @@ class PDBParser:
     def __init__(self, pdbfile):
         self.pdbfile = pdbfile
         self.atoms = []
-
+        
     def parse(self):
         try:
             with open(self.pdbfile, 'r') as pdb:
@@ -67,17 +67,6 @@ class FileReader:
         return self.res
 
 def pre_processing(pdb, partner1, partner2, output_dir):
-    """
-    :parameters:
-    ------------
-    pdb_file - 
-    partner1 -
-    partner2 -
-
-    :returns:
-    ---------
-    """
-
     # ---
     print_infos(message='pre-processing protocol', type='info')    
     
@@ -128,7 +117,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
         if atom['chain_id'] in partner1 and atom['record_name'] == 'ATOM':
             if atom['residue_model'] in ['A', '']:
                 _partner1.append(atom)
-    
+
         if partner2 in ligands:
             add_hydrogens_to_lig = True
             if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM':
@@ -152,17 +141,53 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     
     # adiciona hidrogênios no ligante
     # -------------------------------
-    if add_hydrogens_to_lig is True:
-        ligand  = f"{output_dir}/{output_name}_lig.pdb"
-        ligandH = f"{output_dir}/{output_name}_lig_withH.pdb"
+    if add_hydrogens_to_lig:
+        ligand = f"{output_dir}/{output_name}_lig.pdb"
         write_pdb(_partner2, outfile=f'{ligand}')
-        subprocess.run(f'obabel -ipdb {ligand} -opdb -O {ligandH} -p > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
-        pdb_parser = PDBParser(ligandH)
-        pdb_parser.parse()
-        _partner2 = pdb_parser.get_atoms()
 
-    # ---
-    partners = _partner1 + _ions1 + _partner2 + _ions2
+        # insere hidrogênios da estrutura com o openbabel
+        subprocess.run(f'obabel \
+        -ipdb {ligand} \
+        -omol2 \
+        -O {ligand[:-4]}_withH.mol2 \
+        -p > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
+
+        if not os.path.isfile(f'{ligand[:-4]}_withH.bcc.mol2'):
+            # calcula carga do ligante de acordo com método semiempírico
+            print_infos(message=f'calculating atom charges for the ligand', type='info')
+            subprocess.run(f'antechamber \
+            -fi mol2 \
+            -fo mol2 \
+            -i {ligand[:-4]}_withH.mol2 \
+            -o {ligand[:-4]}_withH.bcc.mol2 \
+            -at gaff2 \
+            -c bcc \
+            -rn LIG \
+            -pf yes > /dev/null 2>&1', subprocess.PIPE, shell=True)
+        
+        subprocess.run(f'parmchk2 \
+        -i {ligand[:-4]}_withH.bcc.mol2 \
+        -o {ligand[:-4]}_withH.bcc.frcmod \
+        -f mol2 \
+        -s gaff2 > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
+
+        if not os.path.isfile(ligand):
+            print_end()
+    
+    # escreve arquivo .pdb do complexo selvagem
+    # -----------------------------------------
+    output_dir_wt = f'{output_dir}/{output_name}_WT'
+    partners      = _partner1 + _ions1 + _partner2 + _ions2
+    wt_resids     = write_resids(partners, outfile=f'{output_dir}/{output_name}.resids.txt')
+    
+    if not os.path.isdir(output_dir_wt):
+        os.makedirs(output_dir_wt)
+    
+    if partner2 in ligands:
+        partners = _partner1 + _ions1 + _ions2
+    
+    write_pdb(partners, outfile=f'{output_dir_wt}/{output_name}_wt.pdb')
+    wild_type = [f'{output_dir_wt}/{output_name}_wt.pdb']
 
     # verifica se existem gaps na estrutura de 'partner1' e 'partner2'
     # ----------------------------------------------------------------
@@ -182,10 +207,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     if mutant_list is None:
         print_infos(message=f'enabling automatic recognition of interface residues', type='info')
         interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
-        
-        # ---
-        if partner2 in ligands:
-            interface2 = find_atoms_closest_to_protein(_partner1, _partner2, dist_cutoff=int_dist_cutoff)
+        interface2 = find_atoms_closest_to_protein(_partner1, _partner2, dist_cutoff=int_dist_cutoff)
 
         # escreve arquivo com parâmetros de mutação
         mutant_file = f'{output_dir}/{output_name}.mutants.list'
@@ -199,22 +221,13 @@ def pre_processing(pdb, partner1, partner2, output_dir):
                         f.write(f'{chain}:{resnum}A\n')
     else:
         mutant_file = mutant_list
-    
+        
     # carrega arquivo com parâmetros de mutação
     # -----------------------------------------
     mutants_reader = FileReader(mutant_file)
     mutants_reader.read_file()
     mutants = mutants_reader.get_data()
-    
-    # escreve arquivo .pdb do complexo selvagem
-    # -----------------------------------------
-    output_dir_wt = f'{output_dir}/{output_name}_WT'
-    if not os.path.isdir(output_dir_wt):
-        os.makedirs(output_dir_wt)
-    write_pdb(partners, outfile=f'{output_dir_wt}/{output_name}_wt.pdb')
-    wt_resids = write_resids(partners, outfile=f'{output_dir}/{output_name}.resids.txt')
-    wild_type = [f'{output_dir_wt}/{output_name}_wt.pdb']
-    
+        
     # insere mutações (edita arquivo .pdb)
     # ------------------------------------
     pdbs = []
@@ -246,19 +259,9 @@ def pre_processing(pdb, partner1, partner2, output_dir):
                 write_pdb(mutant, outfile)
                 pdbs.append(outfile)
 
-    return wild_type, pdbs, wt_resids
+    return wild_type, pdbs, wt_resids, ligand
 
-def post_processing(pdb_files, partner1, partner2, wt_resids):
-    """
-    :parameters:
-    ------------
-    pdb_files
-    partner1
-    partner2
-    
-    :returns: 
-    ---------
-    """
+def post_processing(pdb_files, partner1, partner2, wt_resids, ligand):
     str_partner1 = ''.join(str(x) for x in partner1)
     str_partner2 = ''.join(str(x) for x in partner2)
 
@@ -275,8 +278,8 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
 
         # define caminho e prefixo para escrever outputs
         # ----------------------------------------------
-        output_name = os.path.basename(pdb[:-4])
         output_dir  = os.path.dirname(pdb)
+        output_name = os.path.basename(pdb[:-4])
 
         # insere mutação com o tLeap
         # --------------------------                
@@ -303,34 +306,100 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                 
         # realiza busca por ligações dissulfeto e cria um novo arquivo .pdb
         _pdb, disulfides = find_disulfides(_pdb, outfile=f'{prefix}_02.pdb')
-        conf = f'{prefix}_leap.conf'
-        conf = write_tleap_conf(_pdb, conf, disulfides)
-        subprocess.run(f"tleap -f {conf} > {prefix}_leap.log", stdout=subprocess.PIPE, shell=True)
+        with open(f'{prefix}.tleap1.in', 'w') as f:
+                f.write("source leaprc.protein.ff14SBonlysc\n")
+                f.write("source leaprc.water.tip3p\n")
+                f.write(f"protein = loadPdb {pdb}\n")
+                if disulfides:
+                    for bond in disulfides:
+                        f.write(f'{bond}\n')
+                f.write(f"savePdb protein {pdb[:-4]}.pdb\n")
+                f.write(f"quit")
+        subprocess.run(f"tleap -f {prefix}.tleap1.in > /dev/null 2>&1", stdout=subprocess.PIPE, shell=True)
         
+        # otimização de estrutura com solvente implícito
+        if minimize_rec_lig is True:
+            # prepara arquivo .in do tleap
+            with open(f'{prefix}.tleap2.in', 'w') as f:
+                f.write( 'source leaprc.protein.ff19SB\n')
+                f.write( 'source leaprc.water.tip3p\n')
+                f.write( 'source leaprc.gaff2\n')
+                f.write(f'REC = loadpdb {prefix}_02.pdb\n')
+                f.write(f'LIG = loadmol2 {ligand[:-4]}_withH.bcc.mol2\n')
+                f.write(f'loadamberparams {ligand[:-4]}_withH.bcc.frcmod\n')
+                f.write(f'saveoff LIG data.lib\n')
+                f.write(f'loadoff data.lib\n')
+                f.write( 'COM = combine {REC LIG}\n')
+                f.write( 'addIons COM Na+ 0\n')
+                f.write( 'addIons COM Cl- 0\n')
+                f.write(f'savepdb COM {prefix}_03.pdb\n')
+                f.write(f'saveamberparm COM {prefix}_03.prmtop {prefix}_03.inpcrd\n')
+                f.write( 'quit')
+            # executa o tleap
+            subprocess.run(f'tleap -f {prefix}.tleap2.in', stdout=subprocess.PIPE, shell=True)
+        
+        # prepara arquivo .conf para otimização de geometria no NAMD
+        with open(f'{prefix}.namd-min.conf', 'w') as f:
+            f.write( 'amber                  yes\n')
+            f.write(f'parmfile               {prefix}_03.prmtop\n')
+            f.write(f'ambercoor              {prefix}_03.inpcrd\n')
+            f.write( 'switching              off\n')
+            f.write( 'exclude                scaled1-4\n')
+            f.write( '1-4scaling             0.833333\n')
+            f.write( 'cutoff                 12\n')
+            f.write( 'pairlistdist           14\n')
+            f.write( 'timestep               2\n')
+            f.write( 'rigidBonds             all\n')
+            f.write( 'rigidTolerance         1e-08\n')
+            f.write( 'nonbondedFreq          1\n')
+            f.write( 'fullElectFrequency     2\n')
+            f.write( 'stepspercycle          20\n')
+            f.write(f'outputName             {os.path.basename(prefix)}_04\n')
+            f.write(f'DCDFreq                250\n')
+            f.write( 'xstFreq                100\n')
+            f.write( 'outputEnergies         100\n')
+            f.write( 'outputPressure         100\n')
+            f.write( 'temperature            310\n')
+            f.write( 'gbis                   on\n')
+            f.write( 'alphacutoff            12.0\n')
+            f.write( 'ionConcentration       0.15\n')
+            f.write( 'minimize               10000\n')
+        
+        # otimização de geometria com o NAMD
+        os.chdir(output_dir)
+        print_infos(message='running geometry optimization', type='info')
+        if not os.path.isfile(f'{prefix}_04.dcd'):
+            subprocess.run(f'namd3 +p12 {prefix}.namd-min.conf > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)        
+        
+        # extrai o último frame da trajetória de otimização de geometria
+        with open(f'{prefix}.cpptraj.in', 'w') as f:
+            f.write(f'trajout {prefix}_04_min_lastframe.pdb pdb onlyframes 40\nquit')
+        subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.in', stdout=subprocess.PIPE, shell=True)
+        os.chdir(submit_dir)
+
         # regenera a numeração dos resíduos usando a estrutura wild-type como referência
-        # ------------------------------------------------------------------------------
         # cria dicionário com a numeração dos resíduos de cada cadeia
-        _pdb = glob.glob(f'{output_dir}/*_02.pdb')[0]
-        pdb_parser = PDBParser(_pdb)
-        pdb_parser.parse()
-        _atoms = pdb_parser.get_atoms()
-        
         ref = {}
         with open(wt_resids, 'r') as f:
-            atoms = f.readlines()
-            chain_id = atoms[0].split()[1]
-            first_res = int(atoms[0].split()[2])
+            atoms         = f.readlines()
+            chain_id      = atoms[0].split()[1]
+            seen_chains   = set(chain_id)
             ref[chain_id] = []
             for atom in atoms:
-                atom = atom.split()
-                cur_chain = atom[1]
-                resnum = int(atom[2])
+                atom      = atom.split()
+                cur_chain = str(atom[1])
+                resnum    = int(atom[2])
                 if cur_chain != chain_id:
-                    ref[cur_chain] = []
+                    if cur_chain not in seen_chains:
+                        ref[cur_chain] = []
                 ref[cur_chain].append(resnum)
                 chain_id = cur_chain
+                seen_chains.add(chain_id)
 
         # reescreve a numeração dos resíduos de acordo com a estrutura wild_type
+        pdb_parser = PDBParser(f'{prefix}_04_min_lastframe.pdb')
+        pdb_parser.parse()
+        _atoms = pdb_parser.get_atoms()
         seen_indices = set()
         for cur_chain in ref.keys():
             endat = len(ref[cur_chain])
@@ -339,20 +408,40 @@ def post_processing(pdb_files, partner1, partner2, wt_resids):
                 if atom['atom_index'] in seen_indices:
                     continue
                 else:
-                    if atom['atom_name'] == 'N' \
-                    or atom['residue_name'] in ions \
-                    or atom['residue_name'] in ligands:
+                    if atom['atom_name'] == 'N':
                         count += 1
                     if count <= endat - 1:
                         resnum = ref[cur_chain][count]
                         atom['chain_id'] = cur_chain
-                        atom['residue_number'] = resnum
                         seen_indices.add(atom['atom_index'])
                     else:
                         break
         
-        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_03.pdb')
+        # ---
+        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_05.pdb')
         pdbs.append(_pdb)
+        pdb_parser = PDBParser(_pdb)        
+        pdb_parser.parse()
+        _atoms = pdb_parser.get_atoms()
+        
+        # ---
+        mylist = ['com', 'rec', 'lig']
+        com    = []
+        rec    = []
+        lig    = []
+        if separate_chains is True:
+            for item in mylist:
+                for atom in _atoms:
+                    if item == 'com':
+                        if atom['chain_id'] in partner1:
+                            com.append(atom)
+                        if atom['chain_id'] in partner1 and atom['residue_name'] != 'LIG':
+                            rec.append(atom)
+                        if atom['residue_name'] == 'LIG':
+                            lig.append(atom)
+        write_pdb(com, outfile=f'{prefix}_06.com.pdb')
+        write_pdb(rec, outfile=f'{prefix}_06.rec.pdb')
+        write_pdb(lig, outfile=f'{prefix}_06.lig.pdb')
 
         # mostra total de ligações dissulfeto na tela
         if _pdb.__contains__('wt'):
@@ -412,26 +501,27 @@ def aminoacids2(resname):
     threelettercode = aa[resname]
     return threelettercode
 
-def write_tleap_conf(pdb, conf, disulfides):
-    with open(conf, 'w') as f:
-        f.write("source leaprc.protein.ff14SBonlysc\n")
-        f.write("source leaprc.water.tip3p\n")
-        f.write(f"protein = loadPdb {pdb}\n")
-        if disulfides:
-            for bond in disulfides:
-                f.write(f'{bond}\n')
-        f.write(f"savePdb protein {pdb[:-4]}.pdb\n")
-        f.write(f"quit")
-    return conf
-
 def write_resids(partners, outfile):
+    lig_count = 0
     with open(outfile, 'w') as f:
         for atom in partners:
-            if atom['record_name'] == 'ATOM'   and atom['atom_name'] == 'CA':
-                resname = atom['residue_name']
-                resnum  = atom['residue_number']
-                chain   = atom['chain_id']
+            condition = False
+            resname   = atom['residue_name']
+            resnum    = atom['residue_number']
+            chain     = atom['chain_id']
+            
+            if atom['record_name'] == 'ATOM' and atom['atom_name'] == 'CA':
+                condition = True
+            elif atom['residue_name'] in ligands:
+                lig_count += 1
+            elif atom['residue_name'] in ions:
+                condition = True
+
+            if condition:
                 f.write(f'{resname} {chain} {resnum}\n')
+            if lig_count == 1:
+                f.write(f'{resname} {chain} {resnum}\n')
+
     return outfile
 
 def write_pdb(partners, outfile):
@@ -475,7 +565,7 @@ def find_disulfides(pdb, outfile):
     cys_sg_atoms = []
     cys_residues = []
     j_coord_list = []
-    ssbonds      = []
+    ssbonds = []
     pdb_parser = PDBParser(pdb)
     pdb_parser.parse()
     _atoms = pdb_parser.get_atoms()
@@ -638,22 +728,24 @@ if (__name__ == "__main__"):
     output_dir       = args.odir[0]
     int_dist_cutoff  = args.int_dist_cutoff[0]
     gap_dist_cutoff  = 16
+    minimize_rec_lig = True
+    separate_chains  = True
     backbone         = ['N', 'CA', 'C', 'O']
     ions             = ['MG','CA','NA','CL','FE','K','ZN','MN']
-    separate_chains  = True
+    aminoacids       = [ 'ALA', 'CYS', 'ASP', 'GLU', 'GLH', 'PHE', 'GLY',
+                         'HIS', 'HID', 'HIE', 'HIP', 'ILE', 'LYS', 'LEU',
+                         'MET', 'ASN', 'ASH', 'PRO', 'GLN', 'ARG', 'SER',
+                         'THR', 'VAL', 'TYR', 'TRP']
 
     # pré-processamento
     # =================
-    # a. 
-    # b. 
-    # -----------------
-    wild_type, pdbs, wt_resids = pre_processing(pdb_file, partner1, partner2, output_dir)
+    wild_type, pdbs, wt_resids, ligand = pre_processing(pdb_file, partner1, partner2, output_dir)
     
     # pós-processamento
     # =================
     if len(wild_type) == 1 and len(pdbs) > 0:
-        wild_type = post_processing(wild_type, partner1, partner2, wt_resids)
-        pdbs = post_processing(pdbs, partner1, partner2, wt_resids)
+        wild_type = post_processing(wild_type, partner1, partner2, wt_resids, ligand)
+        pdbs = post_processing(pdbs, partner1, partner2, wt_resids, ligand)
     else:
         print_infos(message='nothing to do', type='info')
         print_end()
