@@ -82,8 +82,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     # cria diretório para outputs
     # ---------------------------
     output_name = os.path.basename(pdb[:-4]).lower()
-    output_dir = f'{output_dir}/outputs/{output_name}'
-
+    output_dir  = f'{output_dir}/outputs/{output_name}'
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
 
@@ -119,7 +118,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
                 _partner1.append(atom)
 
         if partner2 in ligands:
-            add_hydrogens_to_lig = True
+            small_molecule = True
             if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM':
                 if atom['residue_model'] in ['A', '']:
                     _partner2.append(atom)
@@ -138,10 +137,25 @@ def pre_processing(pdb, partner1, partner2, output_dir):
             if atom['residue_name'] in ions:
                 _ions2.append(atom)
     print_infos(message=f'{len(_ions1) + len(_ions2)} ions found.', type='info')
-    
-    # adiciona hidrogênios no ligante
-    # -------------------------------
-    if add_hydrogens_to_lig:
+
+    # ---
+    if small_molecule is True:
+        chains = set()
+        for atom in _partner2:
+            chains.add(atom['chain_id'])
+        chains = list(chains)
+        if len(chains) > 1:
+            _partner2 = []
+            _ions2    = []
+            for atom in _atoms:
+                if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM':
+                    if atom['chain_id'] == chains[0]:
+                        _partner2.append(atom)
+                    if atom['residue_name'] in ions:
+                        _ions2.append(atom)
+
+        # adiciona hidrogênios no ligante
+        # -------------------------------
         ligand = f"{output_dir}/{output_name}_lig.pdb"
         write_pdb(_partner2, outfile=f'{ligand}')
 
@@ -163,6 +177,7 @@ def pre_processing(pdb, partner1, partner2, output_dir):
             -at gaff2 \
             -c bcc \
             -rn LIG \
+            -nc 0 \
             -pf yes > /dev/null 2>&1', subprocess.PIPE, shell=True)
         
         subprocess.run(f'parmchk2 \
@@ -244,10 +259,9 @@ def pre_processing(pdb, partner1, partner2, output_dir):
             for atom in wild_type_structure:
                 if atom['chain_id'] == chain and atom['residue_number'] == resnum[0]:
                     resname = aminoacids1(atom['residue_name'])
-                    resmut  = aminoacids2(resnum[1])
                     outfile = f'{_output_dir}/{output_name}_{chain}_{resname}{resnum[0]}{resnum[1]}.pdb'
                     if atom['atom_name'] in backbone:
-                        atom['residue_name'] = resmut
+                        atom['residue_name'] = 'ALA'
                         count += 1
                     else:
                         continue
@@ -335,6 +349,7 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligand):
                 f.write(f'savepdb COM {prefix}_03.pdb\n')
                 f.write(f'saveamberparm COM {prefix}_03.prmtop {prefix}_03.inpcrd\n')
                 f.write( 'quit')
+
             # executa o tleap
             subprocess.run(f'tleap -f {prefix}.tleap2.in', stdout=subprocess.PIPE, shell=True)
         
@@ -376,7 +391,7 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligand):
             f.write(f'trajout {prefix}_04_min_lastframe.pdb pdb onlyframes 40\nquit')
         subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.in', stdout=subprocess.PIPE, shell=True)
         os.chdir(submit_dir)
-
+        
         # regenera a numeração dos resíduos usando a estrutura wild-type como referência
         # cria dicionário com a numeração dos resíduos de cada cadeia
         ref = {}
@@ -475,40 +490,15 @@ def aminoacids1(resname):
     onelettercode = aa[resname]
     return onelettercode
 
-def aminoacids2(resname):
-    aa = {
-        'A': 'ALA',
-        'C': 'CYS',
-        'D': 'ASP',
-        'E': 'GLU',
-        'F': 'PHE',
-        'G': 'GLY',
-        'H': 'HIS',
-        'I': 'ILE',
-        'K': 'LYS',
-        'L': 'LEU',
-        'M': 'MET',
-        'N': 'ASN',
-        'P': 'PRO',
-        'Q': 'GLN',
-        'R': 'ARG',
-        'S': 'SER',
-        'T': 'THR',
-        'V': 'VAL',
-        'Y': 'TYR',
-        'W': 'TRP'
-    }
-    threelettercode = aa[resname]
-    return threelettercode
-
 def write_resids(partners, outfile):
+    count = 1
     lig_count = 0
     with open(outfile, 'w') as f:
         for atom in partners:
             condition = False
-            resname   = atom['residue_name']
-            resnum    = atom['residue_number']
-            chain     = atom['chain_id']
+            resname = atom['residue_name']
+            resnum  = atom['residue_number']
+            chain   = atom['chain_id']
             
             if atom['record_name'] == 'ATOM' and atom['atom_name'] == 'CA':
                 condition = True
@@ -518,9 +508,10 @@ def write_resids(partners, outfile):
                 condition = True
 
             if condition:
-                f.write(f'{resname} {chain} {resnum}\n')
+                f.write(f'{resname} {chain} {resnum} {count}\n')
+                count += 1
             if lig_count == 1:
-                f.write(f'{resname} {chain} {resnum}\n')
+                f.write(f'{resname} {chain} {resnum} {count}\n')
 
     return outfile
 
@@ -716,7 +707,9 @@ if (__name__ == "__main__"):
     help='str | ...')
     parser.add_argument('--int_dist_cutoff', nargs=1, type=float, default=[4.5], metavar='',
     help=f'float | ')
-    
+    parser.add_argument('--lig_chain', nargs=1, type=str, metavar='',
+    help='str | ...')
+
     # finaliza configuração dos argumentos e variáveis
     # ------------------------------------------------
     args             = parser.parse_args()
@@ -727,6 +720,7 @@ if (__name__ == "__main__"):
     mutant_list      = args.mut_list[0]
     output_dir       = args.odir[0]
     int_dist_cutoff  = args.int_dist_cutoff[0]
+    lig_chain        = args.lig_chain
     gap_dist_cutoff  = 16
     minimize_rec_lig = True
     separate_chains  = True
