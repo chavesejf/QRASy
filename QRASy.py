@@ -23,22 +23,22 @@ def pre_processing(pdb, partner1, partner2, output_dir):
     pdb_parser.parse()
     atoms = pdb_parser.get_atoms()
 
-    # informa o índice e nome da estrutura
-    # ------------------------------------
+    # informa o índice e nome da estrutura na tela
+    # --------------------------------------------
     print_infos(message=f'{os.path.basename(pdb)}', type='structure')
 
     # cria diretório para outputs
     # ---------------------------
     output_name = os.path.basename(pdb[:-4]).lower()
-    output_dir = f'{output_dir}/outputs/{output_name}'
+    output_dir = f'{output_dir}/outputs_qrasy/{output_name}'
 
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
 
-    # verifica se as cadeias de partner1 e partner2 estão no pdb
-    # ----------------------------------------------------------
+    # verifica se as cadeias de partner1 e partner2 estão no .pdb
+    # -----------------------------------------------------------
     chains = find_chains(pdb)
-    count = 0
+    count  = 0
     for chain in chains:
         if chain in partner1:
             count += 1
@@ -667,6 +667,7 @@ if (__name__ == "__main__"):
     separate_chains  = True
     backbone         = ['N', 'CA', 'C', 'O']
     ions             = ['MG', 'CA', 'NA', 'CL', 'FE', 'K', 'ZN', 'MN']
+    files_to_remove  = ['data.lib', 'leap.log', 'sqm.in', 'sqm.out', 'sqm.pdb']
 
     # =================
     # pré-processamento
@@ -679,6 +680,10 @@ if (__name__ == "__main__"):
     if len(wild_type) == 1 and len(pdbs) > 0:
         wild_type = post_processing(wild_type, partner1, partner2, wt_resids, ligand)
         pdbs = post_processing(pdbs, partner1, partner2, wt_resids, ligand)
+        
+        for file in files_to_remove:
+            if os.path.isfile(file):
+                os.remove(file)
     else:
         print_infos(message='nothing to do', type='info')
         print_end()
