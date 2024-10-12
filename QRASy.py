@@ -6,15 +6,19 @@
 # -----------------------------
 from modules.pdb_parser import *
 from modules.mut_parser import *
+from shutil import which
 import numpy as np
 import re
 import os
 import copy
+import time
 import glob
 import argparse
 import subprocess
 
 def pre_processing(pdb, partner1, partner2, output_name, output_dir):
+    """
+    """
     # ---
     print_infos(message='pre-processing protocol', type='info')    
     
@@ -54,6 +58,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
 
     # extrai as cadeias do complexo de acordo com o conteúdo das flags 'partner1' e 'partner2'
     # ----------------------------------------------------------------------------------------
+    add_hydrogens_to_lig = False
     _partner1 = []
     _partner2 = []
     _ions1 = []
@@ -173,16 +178,17 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
     
     # adiciona hidrogênios no ligante
     # -------------------------------
-    if add_hydrogens_to_lig is True:
+    if add_hydrogens_to_lig:
         ligH = openbabel(_partner2, lig_file=f"{output_dir}/{output_name}_lig.pdb")
-        ligH_bcc, ligH_frcmod = antechamber(ligH)
+        ligH_bcc, ligH_frcmod = antechamber(ligH, lig_net_charge)
     else:
         ligH_bcc    = None
         ligH_frcmod = None
-    
     return wt_struct, wt_resids, pdbs, ligH_bcc, ligH_frcmod
 
 def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frcmod):
+    """
+    """
     str_partner1 = ''.join(str(x) for x in partner1)
     str_partner2 = ''.join(str(x) for x in partner2)
     
@@ -239,9 +245,8 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
         
         # otimização de estrutura com solvente implícito
         # ----------------------------------------------
-        if minimize_rec_lig is True:
-            # prepara arquivo .in do tleap
-            with open(f'{prefix}.tleap2.in', 'w') as f:
+        with open(f'{prefix}.tleap2.in', 'w') as f:
+            if system_type == 'P:L':
                 f.write( 'source leaprc.protein.ff14SBonlysc\n')
                 f.write( 'source leaprc.water.tip3p\n')
                 f.write( 'source leaprc.gaff2\n')
@@ -255,8 +260,18 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 f.write(f'savepdb COM {prefix}_03.pdb\n')
                 f.write(f'saveamberparm COM {prefix}_03.prmtop {prefix}_03.inpcrd\n')
                 f.write( 'quit')
-            # executa o tleap
-            subprocess.run(f'tleap -f {prefix}.tleap2.in', stdout=subprocess.PIPE, shell=True)
+            if system_type == 'P:P':
+                f.write( 'source leaprc.protein.ff14SBonlysc\n')
+                f.write( 'source leaprc.water.tip3p\n')
+                f.write( 'source leaprc.gaff2\n')
+                f.write(f'REC = loadpdb {prefix}_02.pdb\n')
+                f.write( 'charge REC\n')
+                f.write(f'savepdb REC {prefix}_03.pdb\n')
+                f.write(f'saveamberparm REC {prefix}_03.prmtop {prefix}_03.inpcrd\n')
+                f.write( 'quit')
+
+        # executa o tleap
+        subprocess.run(f'tleap -f {prefix}.tleap2.in', stdout=subprocess.PIPE, shell=True)
         
         # determina a carga total do complexo
         with open(f'{submit_dir}/leap.log', 'r') as f:
@@ -354,12 +369,12 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
         pdb_parser.parse()
         _atoms = pdb_parser.get_atoms()
         
-        # separa estruturas em "com (complexo)", "rec (receptor)" e "lig (ligante)"
-        mylist = ['com', 'rec', 'lig']
-        com = []
-        rec = []
-        lig = []
-        if separate_chains is True:
+        if system_type == 'P:L':
+            # separa estruturas em "com (complexo)", "rec (receptor)" e "lig (ligante)"
+            mylist = ['com', 'rec', 'lig']
+            com = []
+            rec = []
+            lig = []
             for item in mylist:
                 for atom in _atoms:
                     if item == 'com':
@@ -369,22 +384,57 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                             rec.append(atom)
                         if atom['residue_name'] == 'LIG':
                             lig.append(atom)
-        write_pdb(com, outfile=f'{prefix}_06.com.pdb')
-        write_pdb(rec, outfile=f'{prefix}_06.rec.pdb')
-        write_pdb(lig, outfile=f'{prefix}_06.lig.pdb')
+            write_pdb(com, outfile=f'{prefix}_06.com.pdb')
+            write_pdb(rec, outfile=f'{prefix}_06.rec.pdb')
+            write_pdb(lig, outfile=f'{prefix}_06.lig.pdb')
 
-        # ---
-        print_infos(message='executing mopac', type='info')
-        mopac_keywords = 'PDB 1SCF MOZYME'
-        write_mop(com, mopac_keywords, outfile=f'{prefix}_07.com.mop')
-        write_mop(rec, mopac_keywords, outfile=f'{prefix}_07.rec.mop')
-        write_mop(lig, mopac_keywords, outfile=f'{prefix}_07.lig.mop')
+            # ---
+            mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
+            write_mop(com, mopac_keywords, outfile=f'{prefix}_07.com.mop')
+            write_mop(rec, mopac_keywords, outfile=f'{prefix}_07.rec.mop')
+            write_mop(lig, mopac_keywords, outfile=f'{prefix}_07.lig.mop')
 
-        # executa o mopac
-        os.chdir(output_dir)
-        runMOPAC(f'{prefix}_07.com.mop')
-        runMOPAC(f'{prefix}_07.rec.mop')
-        runMOPAC(f'{prefix}_07.lig.mop')
+            # executa o mopac
+            os.chdir(output_dir)
+            
+            print_infos(message='running QM calculation (complex)', type='info')
+            runMOPAC(f'{prefix}_07.com.mop')
+            
+            print_infos(message='running QM calculation (receptor)', type='info')
+            runMOPAC(f'{prefix}_07.rec.mop')
+            
+            print_infos(message='running QM calculation (ligand)', type='info')
+            runMOPAC(f'{prefix}_07.lig.mop')
+        
+        elif system_type == 'P:P':
+            # separa estruturas em "partner1" e "partner2"
+            mylist = ['partner1', 'partner2']
+            p1 = []
+            p2 = []
+            for item in mylist:
+                for atom in _atoms:
+                    if item == 'partner1':
+                        if atom['chain_id'] in partner1:
+                            p1.append(atom)
+                    if item == 'partner2':
+                        if atom['chain_id'] in partner2:
+                            p2.append(atom)
+            write_pdb(p1, outfile=f'{prefix}_06.partner1.pdb')
+            write_pdb(p2, outfile=f'{prefix}_06.partner2.pdb')
+
+            # ---
+            mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
+            write_mop(p1, mopac_keywords, outfile=f'{prefix}_07.partner1.mop')
+            write_mop(p2, mopac_keywords, outfile=f'{prefix}_07.partner2.mop')
+
+            # executa o mopac
+            os.chdir(output_dir)
+            
+            print_infos(message='running QM calculation (complex)', type='info')
+            runMOPAC(f'{prefix}_07.partner1.mop')
+            
+            print_infos(message='running QM calculation (receptor)', type='info')
+            runMOPAC(f'{prefix}_07.partner2.mop')
 
         # ---    
         for file in files_to_remove:
@@ -392,20 +442,28 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 os.remove(file)
     return pdbs
 
+def read_mol2_file(mol2):
+    """
+    """
+    with open(mol2, 'r') as file:
+        return file.readlines()
+
 def runMOPAC(mop):
+    """
+    """
     subprocess.run(f'/opt/mopac/mopac-main/build/mopac {mop} > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
 
 def openbabel(partner2, lig_file):
+    """
+    """
     print_infos(message='add_hydrogens_to_lig is True', type='info')
-    ligH = f'{lig_file[:-4]}_H.mol2'
-    write_pdb(partner2, outfile=lig_file)
-    subprocess.run(f'obabel \
-    -ipdb {lig_file} \
-    -omol2 -O {lig_file[:-4]}_H.mol2 \
-    -p > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
-    return ligH
+    write_pdb(partner2, outfile=f'{lig_file[:-4]}_H.mol2')
+    subprocess.run(f'obabel -ipdb {lig_file} -omol2 -O {lig_file[:-4]}_H.mol2 -p > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
+    return f'{lig_file[:-4]}_H.mol2'
 
-def antechamber(lig_file):
+def antechamber(lig_file, lig_net_charge):
+    """
+    """
     ligH_bcc    = f'{lig_file[:-4]}_H.bcc.mol2'
     ligH_frcmod = f'{lig_file[:-4]}_H.bcc.frcmod'
     if not os.path.isfile(ligH_bcc):
@@ -415,18 +473,27 @@ def antechamber(lig_file):
         -fo mol2 \
         -i {lig_file} \
         -o {ligH_bcc} \
+        -nc {lig_net_charge} \
         -at gaff2 \
         -c bcc \
         -rn LIG \
+        -dr no \
         -pf yes > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
-    subprocess.run(f'parmchk2 \
-    -i {ligH_bcc} \
-    -o {ligH_frcmod} \
-    -f mol2 \
-    -s gaff2 > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
+    if os.path.isfile(ligH_bcc):
+        subprocess.run(f'parmchk2 \
+        -i {ligH_bcc} \
+        -o {ligH_frcmod} \
+        -f mol2 \
+        -s gaff2 > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
+    else:
+        print_infos(message='an error occurred while preparing the ligand', type='info')
+        print_infos(message='try using the "--lig_net_charge" parameter')
+        print_end()
     return ligH_bcc, ligH_frcmod
 
 def aminoacids_1lettercode(resname):
+    """
+    """
     aa = {
         'ALA': 'A',
         'CYS': 'C',
@@ -453,6 +520,8 @@ def aminoacids_1lettercode(resname):
     return onelettercode
 
 def aminoacids_3lettercode(resname):
+    """
+    """
     aa = {
         'A': 'ALA',
         'C': 'CYS',
@@ -479,28 +548,31 @@ def aminoacids_3lettercode(resname):
     return threelettercode
 
 def write_resids(partners, outfile):
+    """
+    """
     lig_count = 0
     with open(outfile, 'w') as f:
         for atom in partners:
+            resname = atom['residue_name']
+            resnum  = atom['residue_number']
+            chain   = atom['chain_id']
             condition = False
-            resname   = atom['residue_name']
-            resnum    = atom['residue_number']
-            chain     = atom['chain_id']
-            
             if atom['record_name'] == 'ATOM' and atom['atom_name'] == 'CA':
                 condition = True
             elif atom['residue_name'] in ligands:
                 lig_count += 1
             elif atom['residue_name'] in ions:
                 condition = True
-
-            if condition:
+            # ---
+            if condition is True:
                 f.write(f'{resname} {chain} {resnum}\n')
             if lig_count == 1:
                 f.write(f'{resname} {chain} {resnum}\n')
     return outfile
 
 def write_mop(partners, mopac_keywords, outfile):
+    """
+    """
     with open(outfile, 'w') as f:
         chain_id = partners[0]['chain_id']
         f.write(f"{mopac_keywords}\n\n\n")
@@ -528,6 +600,8 @@ def write_mop(partners, mopac_keywords, outfile):
     return outfile
 
 def write_pdb(partners, outfile):
+    """
+    """
     with open(outfile, 'w') as f:
         chain_id = partners[0]['chain_id']
         for atom in partners:
@@ -550,6 +624,8 @@ def write_pdb(partners, outfile):
     return outfile
 
 def renumber_residues(pdb, outfile):
+    """
+    """
     pdb_parser = PDBParser(pdb)
     pdb_parser.parse()
     _atoms = pdb_parser.get_atoms()
@@ -564,6 +640,8 @@ def renumber_residues(pdb, outfile):
     return outfile
 
 def find_disulfides(pdb, outfile):
+    """
+    """
     cys_sg_atoms = []
     cys_residues = []
     j_coord_list = []
@@ -594,6 +672,8 @@ def find_disulfides(pdb, outfile):
     return outfile, ssbonds
 
 def find_chains(pdbfile):
+    """
+    """
     chains = set()
     with open(pdbfile, 'r') as file:
         for line in file:
@@ -603,6 +683,8 @@ def find_chains(pdbfile):
     return chains
 
 def find_ligands(pdbfile):
+    """
+    """
     ligands = set()
     with open(pdbfile, 'r') as file:
         for line in file:
@@ -612,6 +694,8 @@ def find_ligands(pdbfile):
     return ligands
 
 def find_atoms_closest_to_protein(atoms1, atoms2, dist_cutoff):
+    """
+    """
     near_residues = {}
     seen_indices = set()
     for i in atoms1:
@@ -629,6 +713,8 @@ def find_atoms_closest_to_protein(atoms1, atoms2, dist_cutoff):
     return near_residues
 
 def find_gaps(partners):
+    """
+    """
     ca_atoms = [atom for atom in partners if atom['atom_name'] == 'CA' and atom['residue_name'] not in ions]
     ca_total = len(ca_atoms)
     gap_info = []
@@ -651,11 +737,20 @@ def find_gaps(partners):
     return ngaps, gap_info
 
 def calc_distance(atom1, atom2):
+    """
+    """
     i = np.array([atom1['x'], atom1['y'], atom1['z']])
     j = np.array([atom2['x'], atom2['y'], atom2['z']])
     return np.linalg.norm(i - j)
 
+def istool(tool):
+    """
+    """
+    return which(tool) is not None
+
 def isdir(path):
+    """
+    """
     if os.path.isdir(path):
         return os.path.abspath(path)
     else:
@@ -663,15 +758,21 @@ def isdir(path):
         print_end()
 
 def isfile(file):
+    """
+    """
     if os.path.isfile(file):
         return os.path.abspath(file)
     else:
         print_infos()
 
 def print_end():
+    """
+    """
     exit(f'\n --- End process --- \n')
 
 def print_infos(message, type):
+    """
+    """
     if type == 'info':
         print(f'      info: {message}')
     if type == 'warning':
@@ -681,25 +782,59 @@ def print_infos(message, type):
     if type == 'protocol':
         print(f'  protocol: {message}')
 
+def processing_time(st):
+    """
+    """
+    sum_x = 0
+    for i in range(1000000):
+        sum_x += i
+    time.sleep(1)
+    elapsed_time = time.time() - st
+    print(' processing time:', time.strftime("%H:%M:%S", time.gmtime(elapsed_time)))
+
+def configure_requirements():
+    """
+    """
+    requirements = ['namd3', 'antechamber', 'cpptraj', 'parmchk2']
+    for item in requirements:
+        condition = istool(item)
+        if condition is False:
+            print(f' error: requirement not found -> {item}\n')
+            print_end()
+
 def header():
+    """
+    """
     print('')
-    print(' =============================================')
-    print('  QRASy - Quantum Reactivity Alanine Scanning ')
-    print(' =============================================')
+    print(' ================================================')
+    print('  QRASy - Quantum Reactivity Alanine Scanning (y)')
+    print()
+    print(' Authors: Elton Chaves, Gerd Rocha, Igor Barden  ')
+    print(' Contact: chavesejf@gmail.com')
+    print('     DOI: N/A')
+    print(' ================================================')
     print('')
 
-if (__name__ == "__main__"):   
+if (__name__ == "__main__"):
+    """
+    """
     # define variável que armazena o diretório de submissão
     submit_dir = os.getcwd()
+
+    # Define o tempo de início do script
+    st = time.time()
+
+    # ---
+    configure_requirements()
 
     # imprime o cabeçalho na tela
     header()
 
     # configura os argumentos do script
     # ---------------------------------
-    parser = argparse.ArgumentParser()
+    parser    = argparse.ArgumentParser()
     mandatory = parser.add_argument_group('mandatory arguments')
- 
+
     # obrigatórios
     mandatory.add_argument('--ipdb', nargs=1, type=isfile, required=True, metavar='',
     help='str | input file in the PDB format')
@@ -707,6 +842,8 @@ if (__name__ == "__main__"):
     help='str | chain ID of the partner1 (e.g.: receptor)')
     mandatory.add_argument('--partner2', nargs=1, required=True, metavar='',
     help='str | chain ID of the partner2 or ligand ID (e.g.: ligand)')
+    mandatory.add_argument('--system_type', nargs=1, required=True, choices=['P:L', 'P:P'], default=['P:P'], metavar='',
+    help='str | ...')
 
     # opcionais
     parser.add_argument('--odir', nargs=1, type=isdir, default=[f'{submit_dir}'], metavar='',
@@ -715,30 +852,32 @@ if (__name__ == "__main__"):
     help='str | ...')
     parser.add_argument('--int_dist_cutoff', nargs=1, type=float, default=[4.5], metavar='',
     help=f'float | ')
+    parser.add_argument('--lig_net_charge', nargs=1, type=int, default=[0], metavar='',
+    help=f'int | ...')
     
     # finaliza configuração dos argumentos e variáveis
     # ------------------------------------------------
-    args             = parser.parse_args()
-    pdb_file         = args.ipdb[0]
-    ligands          = find_ligands(pdb_file)
-    partner1         = list(args.partner1)[0]
-    partner2         = list(args.partner2)[0] if args.partner2[0] not in ligands else args.partner2[0]
-    mutant_list      = args.mut_list[0]
-    int_dist_cutoff  = args.int_dist_cutoff[0]
-    gap_dist_cutoff  = 16
-    minimize_rec_lig = True
-    separate_chains  = True
-    backbone         = ['N', 'CA', 'C', 'O']
-    ions             = ['MG', 'CA', 'NA', 'CL', 'FE', 'K', 'ZN', 'MN']
-    output_name      = os.path.basename(pdb_file[:-4]).lower()
-    output_dir       = f'{args.odir[0]}/outputs_qrasy/{output_name}'
-    files_to_remove  = [
+    args                 = parser.parse_args()
+    pdb_file             = args.ipdb[0]
+    ligands              = find_ligands(pdb_file)
+    partner1             = list(args.partner1)[0]
+    partner2             = list(args.partner2)[0] if args.partner2[0] not in ligands else args.partner2[0]
+    system_type          = args.system_type[0]
+    mutant_list          = args.mut_list[0]
+    int_dist_cutoff      = args.int_dist_cutoff[0]
+    lig_net_charge       = args.lig_net_charge[0]
+    gap_dist_cutoff      = 16
+    backbone             = ['N', 'CA', 'C', 'O']
+    ions                 = ['MG', 'CA', 'NA', 'CL', 'FE', 'K', 'ZN', 'MN']
+    output_name          = os.path.basename(pdb_file[:-4]).lower()
+    output_dir           = f'{args.odir[0]}/outputs_qrasy/{output_name}'
+    files_to_remove      = [
         f'{submit_dir}/data.lib',
         f'{submit_dir}/leap.log',
         f'{submit_dir}/sqm.in',
         f'{submit_dir}/sqm.out',
         f'{submit_dir}/sqm.pdb']
-
+    
     # =================
     # pré-processamento
     # =================
@@ -753,4 +892,4 @@ if (__name__ == "__main__"):
     else:
         print_infos(message='nothing to do', type='info')
     
-    print_end()
+    processing_time(st); print_end()
