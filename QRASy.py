@@ -442,12 +442,6 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 os.remove(file)
     return pdbs
 
-def read_mol2_file(mol2):
-    """
-    """
-    with open(mol2, 'r') as file:
-        return file.readlines()
-
 def runMOPAC(mop):
     """
     """
@@ -795,7 +789,7 @@ def processing_time(st):
 def configure_requirements():
     """
     """
-    requirements = ['namd3', 'antechamber', 'cpptraj', 'parmchk2']
+    requirements = ['namd3', 'antechamber', 'cpptraj', 'parmchk2', 'obabel']
     for item in requirements:
         condition = istool(item)
         if condition is False:
@@ -824,11 +818,11 @@ if (__name__ == "__main__"):
     # Define o tempo de início do script
     st = time.time()
 
-    # ---
-    configure_requirements()
-
     # imprime o cabeçalho na tela
     header()
+
+    # ---
+    configure_requirements()
 
     # configura os argumentos do script
     # ---------------------------------
