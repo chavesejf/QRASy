@@ -76,7 +76,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
             if atom['chain_id'] in partner2 and atom['record_name'] == 'ATOM':
                 if atom['residue_model'] in ['A', '']:
                     _partner2.append(atom)
-    
+
     # busca por ions na estrutura
     # ---------------------------
     for atom in atoms:
@@ -180,7 +180,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
     # adiciona hidrogênios no ligante
     # -------------------------------
     if add_hydrogens_to_lig:
-        ligH = openbabel(_partner2, lig_file=f"{output_dir}/{output_name}_lig.pdb")
+        ligH = openbabel(_partner2, lig_name=f"{output_dir}/{output_name}")
         ligH_bcc, ligH_frcmod = antechamber(ligH, lig_net_charge)
     else:
         ligH_bcc    = None
@@ -421,13 +421,13 @@ def runMOPAC(mop, mopac_exec):
     """
     subprocess.run(f'{mopac_exec} {mop} > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
 
-def openbabel(partner2, lig_file):
+def openbabel(partner2, lig_name):
     """
     """
     print_infos(message='add_hydrogens_to_lig is True', type='info')
-    write_pdb(partner2, outfile=f'{lig_file[:-4]}_H.mol2')
-    subprocess.run(f'obabel -ipdb {lig_file} -omol2 -O {lig_file[:-4]}_H.mol2 -p > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
-    return f'{lig_file[:-4]}_H.mol2'
+    write_pdb(partner2, outfile=f'{lig_name}.pdb')
+    subprocess.run(f'obabel -ipdb {lig_name}.pdb -omol2 -O {lig_name[:-4]}_H.mol2 -p > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
+    return f'{lig_name[:-4]}_H.mol2'
 
 def antechamber(lig_file, lig_net_charge):
     """
@@ -455,7 +455,7 @@ def antechamber(lig_file, lig_net_charge):
         -s gaff2 > /dev/null 2>&1', stdout=subprocess.PIPE, shell=True)
     else:
         print_infos(message='an error occurred while preparing the ligand', type='info')
-        print_infos(message='try using the "--lig_net_charge" parameter')
+        print_infos(message='try using the "--lig_net_charge" parameter', type='info')
         print_end()
     return ligH_bcc, ligH_frcmod
 
@@ -807,23 +807,23 @@ if (__name__ == "__main__"):
 
     # obrigatórios
     mandatory.add_argument('--ipdb', nargs=1, type=isfile, required=True, metavar='',
-    help='str | input file in the PDB format')
+    help='input file in the PDB format')
     mandatory.add_argument('--partner1', nargs=1, required=True, metavar='',
-    help='str | chain ID of the partner1 (e.g.: receptor)')
+    help='chain ID of the partner1 (e.g.: receptor)')
     mandatory.add_argument('--partner2', nargs=1, required=True, metavar='',
-    help='str | chain ID of the partner2 or ligand ID (e.g.: ligand)')
+    help='chain ID of the partner2 or ligand ID (e.g.: ligand)')
     mandatory.add_argument('--system_type', nargs=1, required=True, choices=['P:L', 'P:P'], default=['P:P'], metavar='',
-    help='str | ...')
+    help='...')
 
     # opcionais
     parser.add_argument('--odir', nargs=1, type=isdir, default=[f'{submit_dir}'], metavar='',
-    help=f'str | folder path to save the output files (default={submit_dir})')
+    help=f'folder path to save the output files (default={submit_dir})')
     parser.add_argument('--mut_list', nargs=1, type=isfile, default=[None], metavar='',
-    help='str | ...')
+    help='...')
     parser.add_argument('--int_dist_cutoff', nargs=1, type=float, default=[4.5], metavar='',
-    help=f'float | ')
+    help=f'...')
     parser.add_argument('--lig_net_charge', nargs=1, type=int, default=[0], metavar='',
-    help=f'int | ...')
+    help=f'...')
     
     # finaliza configuração dos argumentos e variáveis
     # ------------------------------------------------
