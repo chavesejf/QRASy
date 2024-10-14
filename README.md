@@ -8,6 +8,7 @@
 | Openbabel      | 3.1.1   |
 | Ambertools     | 23      | 
 | NAMD           | 3.0     |
+| PRIMoRDiA      | 1.25    |
 
 ## Download & Install
 
