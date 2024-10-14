@@ -21,6 +21,7 @@
 | -\-system_type         | Yes       | Determines the type of biological system (e.g.:protein-ligand or protein-protein |
 | -\-odir                | No        | Output directory |
 | -\-int_dist_cutoff     | No        | Cutoff distance to detect interface residues |
+| -\-lig_net_charge      | No        | Cutoff distance to detect interface residues |
 
 ## Citation
 
