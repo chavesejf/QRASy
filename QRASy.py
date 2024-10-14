@@ -770,6 +770,9 @@ def configure_requirements():
         if condition is False:
             print(f' error: requirement not found -> {item}\n')
             print_end()
+    if not os.path.isfile(mopac_exec):
+        print(f' error: requirement not found -> {mopac_exec}\n')
+        print_end()    
     return mopac_exec
 
 def header():
