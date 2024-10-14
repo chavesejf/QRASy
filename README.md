@@ -1,4 +1,5 @@
 ## Overview
+QRASy - Quantum Reactivity Alanine Scanning (y)
 
 ## Requirements
 
