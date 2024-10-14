@@ -4,7 +4,7 @@
 
 | Package        | Version |
 |----------------|---------|
-| python         | 3.10    |
+| Python         | 3.10    |
 | Openbabel      | 3.1.1   |
 | Ambertools     | 23      | 
 | NAMD           | 3.0     |
