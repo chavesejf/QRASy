@@ -121,6 +121,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
     # interface e cria arquivo c/ os parâmetros de mutação
     # --------------------------------------------------------------------------------------
     if mutant_list is None:
+        print_infos(message=f'mutant_list is False', type='info')
         print_infos(message=f'enabling automatic recognition of interface residues', type='info')
         interface1 = find_atoms_closest_to_protein(_partner2, _partner1, dist_cutoff=int_dist_cutoff)
         interface2 = find_atoms_closest_to_protein(_partner1, _partner2, dist_cutoff=int_dist_cutoff)
@@ -369,72 +370,45 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
         pdb_parser.parse()
         _atoms = pdb_parser.get_atoms()
         
-        if system_type == 'P:L':
-            # separa estruturas em "com (complexo)", "rec (receptor)" e "lig (ligante)"
-            mylist = ['com', 'rec', 'lig']
-            com = []
-            rec = []
-            lig = []
-            for item in mylist:
-                for atom in _atoms:
-                    if item == 'com':
-                        if atom['chain_id'] in partner1:
-                            com.append(atom)
-                        if atom['chain_id'] in partner1 and atom['residue_name'] != 'LIG':
-                            rec.append(atom)
-                        if atom['residue_name'] == 'LIG':
-                            lig.append(atom)
-            write_pdb(com, outfile=f'{prefix}_06.com.pdb')
-            write_pdb(rec, outfile=f'{prefix}_06.rec.pdb')
-            write_pdb(lig, outfile=f'{prefix}_06.lig.pdb')
-
-            # ---
-            mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
-            write_mop(com, mopac_keywords, outfile=f'{prefix}_07.com.mop')
-            write_mop(rec, mopac_keywords, outfile=f'{prefix}_07.rec.mop')
-            write_mop(lig, mopac_keywords, outfile=f'{prefix}_07.lig.mop')
-
-            # executa o mopac
-            os.chdir(output_dir)
-            
-            print_infos(message='running QM calculation (complex)', type='info')
-            runMOPAC(f'{prefix}_07.com.mop')
-            
-            print_infos(message='running QM calculation (receptor)', type='info')
-            runMOPAC(f'{prefix}_07.rec.mop')
-            
-            print_infos(message='running QM calculation (ligand)', type='info')
-            runMOPAC(f'{prefix}_07.lig.mop')
+        # separa estruturas em "complex", "partner1" e "partner2"
+        mylist = ['complex', 'partner1', 'partner2']
+        com = []
+        p1  = []
+        p2  = []
+        for item in mylist:
+            for atom in _atoms:
+                if item == 'complex':
+                    if atom['chain_id'] in partner1 or atom['chain_id'] in partner2:
+                        com.append(atom)
+                if item == 'partner1':
+                    if atom['chain_id'] in partner1:
+                        p1.append(atom)
+                if item == 'partner2':
+                    if atom['chain_id'] in partner2:
+                        p2.append(atom)
         
-        elif system_type == 'P:P':
-            # separa estruturas em "partner1" e "partner2"
-            mylist = ['partner1', 'partner2']
-            p1 = []
-            p2 = []
-            for item in mylist:
-                for atom in _atoms:
-                    if item == 'partner1':
-                        if atom['chain_id'] in partner1:
-                            p1.append(atom)
-                    if item == 'partner2':
-                        if atom['chain_id'] in partner2:
-                            p2.append(atom)
-            write_pdb(p1, outfile=f'{prefix}_06.partner1.pdb')
-            write_pdb(p2, outfile=f'{prefix}_06.partner2.pdb')
+        # ---
+        write_pdb(com, outfile=f'{prefix}_06.complex.pdb')
+        write_pdb(p1,  outfile=f'{prefix}_06.partner1.pdb')
+        write_pdb(p2,  outfile=f'{prefix}_06.partner2.pdb')
 
-            # ---
-            mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
-            write_mop(p1, mopac_keywords, outfile=f'{prefix}_07.partner1.mop')
-            write_mop(p2, mopac_keywords, outfile=f'{prefix}_07.partner2.mop')
+        # ---
+        mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
+        write_mop(com, mopac_keywords, outfile=f'{prefix}_07.complex.mop')
+        write_mop(p1,  mopac_keywords, outfile=f'{prefix}_07.partner1.mop')
+        write_mop(p2,  mopac_keywords, outfile=f'{prefix}_07.partner2.mop')
 
-            # executa o mopac
-            os.chdir(output_dir)
-            
-            print_infos(message='running QM calculation (complex)', type='info')
-            runMOPAC(f'{prefix}_07.partner1.mop')
-            
-            print_infos(message='running QM calculation (receptor)', type='info')
-            runMOPAC(f'{prefix}_07.partner2.mop')
+        # executa o mopac
+        os.chdir(output_dir)
+        
+        print_infos(message='running QM calculation (complex)', type='info')
+        runMOPAC(f'{prefix}_07.complex.mop', mopac_exec)
+
+        print_infos(message='running QM calculation (complex)', type='info')
+        runMOPAC(f'{prefix}_07.partner1.mop', mopac_exec)
+        
+        print_infos(message='running QM calculation (receptor)', type='info')
+        runMOPAC(f'{prefix}_07.partner2.mop', mopac_exec)
 
         # ---    
         for file in files_to_remove:
@@ -442,10 +416,10 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 os.remove(file)
     return pdbs
 
-def runMOPAC(mop):
+def runMOPAC(mop, mopac_exec):
     """
     """
-    subprocess.run(f'/opt/mopac/mopac-main/build/mopac {mop} > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
+    subprocess.run(f'{mopac_exec} {mop} > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
 
 def openbabel(partner2, lig_file):
     """
@@ -789,12 +763,14 @@ def processing_time(st):
 def configure_requirements():
     """
     """
+    mopac_exec   = '/opt/mopac/22.1.0/build/mopac'
     requirements = ['namd3', 'antechamber', 'cpptraj', 'parmchk2', 'obabel']
     for item in requirements:
         condition = istool(item)
         if condition is False:
             print(f' error: requirement not found -> {item}\n')
             print_end()
+    return mopac_exec
 
 def header():
     """
@@ -822,7 +798,7 @@ if (__name__ == "__main__"):
     header()
 
     # ---
-    configure_requirements()
+    mopac_exec = configure_requirements()
 
     # configura os argumentos do script
     # ---------------------------------
