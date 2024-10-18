@@ -69,7 +69,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
                 _partner1.append(atom)
         if partner2 in ligands:
             add_hydrogens_to_lig = True
-            if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM' and atom['chain_id'] == partner1:
+            if atom['residue_name'] in partner2 and atom['record_name'] == 'HETATM' and atom['chain_id'] in partner1:
                 if atom['residue_model'] in ['A', '']:
                     _partner2.append(atom)
         else:
@@ -94,7 +94,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
 
     # escreve arquivo .pdb do complexo selvagem
     # -----------------------------------------
-    partners  = _partner1 + _ions1 + _partner2 + _ions2
+    partners  = _partner1 +  _partner2 + _ions1 + _ions2
     wt_resids = write_resids(partners, outfile=f'{output_dir}/{output_name}.resids.txt')
     
     if not os.path.isdir(f'{output_dir}/{output_name}_WT'):
@@ -116,7 +116,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
         print_end()
     else:
         print_infos(message=f'{ngaps} gap(s) found', type='info')
-    
+
     # se não existir parâmetros de mutação, ativa o reconhecimento automático de resíduos na 
     # interface e cria arquivo c/ os parâmetros de mutação
     # --------------------------------------------------------------------------------------
@@ -165,7 +165,7 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
                     resmut  = aminoacids_3lettercode(resname)
                     outfile = f'{_output_dir}/{output_name}_{chain}_{resname}{resnum}A.pdb'
                     if atom['atom_name'] in backbone:
-                        atom['residue_name'] = resmut
+                        atom['residue_name'] = 'ALA'
                         count += 1
                     else:
                         continue
@@ -176,11 +176,25 @@ def pre_processing(pdb, partner1, partner2, output_name, output_dir):
             else:
                 write_pdb(mutant, outfile)
                 pdbs.append(outfile)
-    
+
+    # busca por resíduos próximos da mutação (E:L e P:P)
+    # --------------------------------------------------
+    '''
+    for chain in mutants.keys():
+        for resnum in mutants[chain]:
+            atoms_i = []
+            atoms_j = []
+            for atom in atoms:
+                if atom['residue_number'] == resnum:
+                    pass
+    '''          
+    # busca por resíduos próximos do sítio ativo (E:L)
+    # ------------------------------------------------
+
     # adiciona hidrogênios no ligante
     # -------------------------------
     if add_hydrogens_to_lig:
-        ligH = openbabel(_partner2, lig_name=f"{output_dir}/{output_name}")
+        ligH = openbabel(_partner2, lig_name=f"{output_dir}/{output_name}_lig")
         ligH_bcc, ligH_frcmod = antechamber(ligH, lig_net_charge)
     else:
         ligH_bcc    = None
@@ -247,7 +261,7 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
         # otimização de estrutura com solvente implícito
         # ----------------------------------------------
         with open(f'{prefix}.tleap2.in', 'w') as f:
-            if system_type == 'P:L':
+            if system_type == 'E:L':
                 f.write( 'source leaprc.protein.ff14SBonlysc\n')
                 f.write( 'source leaprc.water.tip3p\n')
                 f.write( 'source leaprc.gaff2\n')
@@ -258,6 +272,9 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 f.write(f'loadoff data.lib\n')
                 f.write( 'COM = combine {REC LIG}\n')
                 f.write( 'charge COM\n')
+                if ionize is True:
+                    f.write( 'addIons COM Na+ 0\n')
+                    f.write( 'addIons COM Cl- 0\n')
                 f.write(f'savepdb COM {prefix}_03.pdb\n')
                 f.write(f'saveamberparm COM {prefix}_03.prmtop {prefix}_03.inpcrd\n')
                 f.write( 'quit')
@@ -267,6 +284,9 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
                 f.write( 'source leaprc.gaff2\n')
                 f.write(f'REC = loadpdb {prefix}_02.pdb\n')
                 f.write( 'charge REC\n')
+                if ionize is True:
+                    f.write( 'addIons REC Na+ 0\n')
+                    f.write( 'addIons REC Cl- 0\n')
                 f.write(f'savepdb REC {prefix}_03.pdb\n')
                 f.write(f'saveamberparm REC {prefix}_03.prmtop {prefix}_03.inpcrd\n')
                 f.write( 'quit')
@@ -321,11 +341,14 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
         # extrai o último frame da trajetória de otimização de geometria
         with open(f'{prefix}.cpptraj.in', 'w') as f:
             f.write(f'trajout {prefix}_04_min_lastframe.pdb pdb onlyframes 40\nquit')
-        
+    
         # executa o cpptraj
         subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.in', stdout=subprocess.PIPE, shell=True)
-
+        
+        # ----------------------------------------------------------------------
         # reescreve a numeração dos resíduos de acordo com a estrutura wild_type
+        # GAMBIARRA ==> melhorar este bloco
+        # ----------------------------------------------------------------------
         os.chdir(submit_dir)
         ref = {}
         with open(wt_resids, 'r') as f:
@@ -335,80 +358,138 @@ def post_processing(pdb_files, partner1, partner2, wt_resids, ligH_bcc, ligH_frc
             ref[chain_id] = []
             for atom in atoms:
                 atom      = atom.split()
+                residue   = str(atom[0])
                 cur_chain = str(atom[1])
                 resnum    = int(atom[2])
                 if cur_chain != chain_id:
                     if cur_chain not in seen_chains:
                         ref[cur_chain] = []
-                ref[cur_chain].append(resnum)
+                ref[cur_chain].append([residue, resnum])
                 chain_id = cur_chain
                 seen_chains.add(chain_id)
+        
+        # ---
         pdb_parser = PDBParser(f'{prefix}_04_min_lastframe.pdb')
         pdb_parser.parse()
-        _atoms = pdb_parser.get_atoms()
+        atoms = pdb_parser.get_atoms()
+        
+        # ---
         seen_indices = set()
         for cur_chain in ref.keys():
             endat = len(ref[cur_chain])
             count = -1
-            for atom in _atoms:
+            for atom in atoms:
                 if atom['atom_index'] in seen_indices:
                     continue
                 else:
                     if atom['atom_name'] == 'N':
                         count += 1
+
+                    if atom['residue_name'] == 'LIG':
+                        count += 1
+                        atom['record_name']    = 'HETATM'
+                        atom['chain_id']       = cur_chain
+                        atom['residue_number'] = resnum + 1
+                        continue
+
+                    if atom['atom_type'] in ions:    
+                        resnum += 1
+                        atom['record_name']    = 'HETATM'
+                        atom['chain_id']       = cur_chain
+                        atom['residue_number'] = resnum
+                        continue
+                    
                     if count <= endat - 1:
-                        resnum = ref[cur_chain][count]
-                        atom['chain_id'] = cur_chain
+                        resnum = ref[cur_chain][count][1]
+                        atom['chain_id']       = cur_chain
+                        atom['residue_number'] = resnum
                         seen_indices.add(atom['atom_index'])
                     else:
                         break
         
         # ---
-        _pdb = write_pdb(_atoms, outfile=f'{output_dir}/{output_name}_05.pdb')
-        pdbs.append(_pdb)
-        pdb_parser = PDBParser(_pdb)        
+        _pdb = write_pdb(atoms, outfile=f'{output_dir}/{output_name}_05.pdb')
+        
+        # ---
+        pdb_parser = PDBParser(f'{prefix}_04_min_lastframe.pdb')        
         pdb_parser.parse()
-        _atoms = pdb_parser.get_atoms()
-        
-        # separa estruturas em "complex", "partner1" e "partner2"
-        mylist = ['complex', 'partner1', 'partner2']
-        com = []
-        p1  = []
-        p2  = []
-        for item in mylist:
-            for atom in _atoms:
-                if item == 'complex':
-                    if atom['chain_id'] in partner1 or atom['chain_id'] in partner2:
-                        com.append(atom)
-                if item == 'partner1':
-                    if atom['chain_id'] in partner1:
-                        p1.append(atom)
-                if item == 'partner2':
-                    if atom['chain_id'] in partner2:
-                        p2.append(atom)
-        
-        # ---
-        write_pdb(com, outfile=f'{prefix}_06.complex.pdb')
-        write_pdb(p1,  outfile=f'{prefix}_06.partner1.pdb')
-        write_pdb(p2,  outfile=f'{prefix}_06.partner2.pdb')
+        atoms = pdb_parser.get_atoms()
+        partner1_resnum = []
+        partner2_resnum = []
+        ligand_resnum   = []
+        ions_str        = ','.join(ions)
+        for atom in atoms:    
+            if atom['chain_id'] in partner1 and atom['atom_name'] == 'CA' and not atom['residue_name'] == 'LIG':
+                partner1_resnum.append(atom['residue_number'])
+            
+            if system_type == 'E:L':
+                if atom['residue_name'] == 'LIG':
+                    ligand_resnum.append(atom['residue_number'])
+            
+            if system_type == 'P:P':
+                if atom['chain_id'] in partner2 and atom['atom_name'] == 'CA':
+                    partner2_resnum.append(atom['residue_number'])
 
         # ---
-        mopac_keywords = 'PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 PDB CUTOFF=9.0 LET DISP(1.0)'
-        write_mop(com, mopac_keywords, outfile=f'{prefix}_07.complex.mop')
-        write_mop(p1,  mopac_keywords, outfile=f'{prefix}_07.partner1.mop')
-        write_mop(p2,  mopac_keywords, outfile=f'{prefix}_07.partner2.mop')
+        mopac_keywords = 'NOTER NOCOMMENTS XYZ PM7 GEO-OK ALLVEC LARGE VECTORS 1SCF MOZYME PL T=1D EPS=78.4 RSOLV=1.3 CUTOFF=9.0 LET DISP(1.0)'
 
+        # COMPLEX
+        with open(f'{prefix}.cpptraj.complex.in', 'w') as f:
+            f.write(f'trajout {prefix}_04_min_lastframe.complex.mop xyz onlyframes 40\n')
+            f.write(f'trajout {prefix}_04_min_lastframe.complex.xyz xyz onlyframes 40\nquit')
+        subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.complex.in', stdout=subprocess.PIPE, shell=True)
+        with open(f'{prefix}_04_min_lastframe.complex.mop', 'r') as f:
+            lines = f.readlines()
+            lines = lines[2:]
+            lines.insert(0, f'{mopac_keywords}\n\n\n')
+        with open(f'{prefix}_04_min_lastframe.complex.mop', 'w') as f:
+            f.writelines(lines)
+
+        # PARTNER1
+        if system_type == 'E:L':
+            with open(f'{prefix}.cpptraj.partner1.in', 'w') as f:
+                f.write(f'strip :{ligand_resnum[0]}\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner1.mop xyz onlyframes 40\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner1.xyz xyz onlyframes 40\nquit')
+        if system_type == 'P:P':
+            with open(f'{prefix}.cpptraj.partner1.in', 'w') as f:
+                f.write(f'strip :{partner2_resnum[0]}-{partner2_resnum[-1]}\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner1.mop xyz onlyframes 40\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner1.xyz xyz onlyframes 40\n')
+        subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.partner1.in', stdout=subprocess.PIPE, shell=True)
+        with open(f'{prefix}_04_min_lastframe.partner1.mop', 'r') as f:
+            lines = f.readlines()
+            lines = lines[2:]
+            lines.insert(0, f'{mopac_keywords}\n\n\n')
+            with open(f'{prefix}_04_min_lastframe.partner1.mop', 'w') as f:
+                f.writelines(lines)           
+
+        # PARTNER2
+        if system_type == 'E:L':
+            with open(f'{prefix}.cpptraj.partner2.in', 'w') as f:
+                f.write(f'strip :{partner1_resnum[0]}-{partner1_resnum[-1]}\n')
+                f.write(f'strip :{ions_str}\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner2.mop xyz onlyframes 40\n')
+                f.write(f'trajout {prefix}_04_min_lastframe.partner2.xyz xyz onlyframes 40\n')
+            subprocess.run(f'cpptraj -p {prefix}_03.prmtop -y {prefix}_04.dcd -i {prefix}.cpptraj.partner2.in', stdout=subprocess.PIPE, shell=True)
+            with open(f'{prefix}_04_min_lastframe.partner2.mop', 'r') as f:
+                lines = f.readlines()
+                lines = lines[2:]
+                lines.insert(0, f'{mopac_keywords}\n\n\n')
+                with open(f'{prefix}_04_min_lastframe.partner2.mop', 'w') as f:
+                    f.writelines(lines)
+        
         # executa o mopac
         os.chdir(output_dir)
         
         print_infos(message='running QM calculation (complex)', type='info')
-        runMOPAC(f'{prefix}_07.complex.mop', mopac_exec)
+        runMOPAC(f'{prefix}_04_min_lastframe.complex.mop', mopac_exec)
 
-        print_infos(message='running QM calculation (complex)', type='info')
-        runMOPAC(f'{prefix}_07.partner1.mop', mopac_exec)
+        print_infos(message='running QM calculation (partner1)', type='info')
+        runMOPAC(f'{prefix}_04_min_lastframe.partner1.mop', mopac_exec)
         
-        print_infos(message='running QM calculation (receptor)', type='info')
-        runMOPAC(f'{prefix}_07.partner2.mop', mopac_exec)
+        print_infos(message='running QM calculation (partner2)', type='info')
+        runMOPAC(f'{prefix}_04_min_lastframe.partner2.mop', mopac_exec)
 
         # ---    
         for file in files_to_remove:
@@ -425,9 +506,10 @@ def openbabel(partner2, lig_name):
     """
     """
     print_infos(message='add_hydrogens_to_lig is True', type='info')
-    write_pdb(partner2, outfile=f'{lig_name}.pdb')
-    subprocess.run(f'obabel -ipdb {lig_name}.pdb -omol2 -O {lig_name[:-4]}_H.mol2 -p > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
-    return f'{lig_name[:-4]}_H.mol2'
+    if not os.path.isfile(f'{lig_name}.pdb'):
+        write_pdb(partner2, outfile=f'{lig_name}.pdb')
+    subprocess.run(f'obabel -ipdb {lig_name}.pdb -omol2 -O {lig_name}_H.mol2 -p > /dev/null 2>&1', shell=True, stdout=subprocess.PIPE)
+    return f'{lig_name}_H.mol2'
 
 def antechamber(lig_file, lig_net_charge):
     """
@@ -529,8 +611,9 @@ def write_resids(partners, outfile):
                 condition = True
             elif atom['residue_name'] in ligands:
                 lig_count += 1
-            elif atom['residue_name'] in ions:
-                condition = True
+            elif atom['atom_type'] in ions:
+                condition = False
+            
             # ---
             if condition is True:
                 f.write(f'{resname} {chain} {resnum}\n')
@@ -538,46 +621,14 @@ def write_resids(partners, outfile):
                 f.write(f'{resname} {chain} {resnum}\n')
     return outfile
 
-def write_mop(partners, mopac_keywords, outfile):
-    """
-    """
-    with open(outfile, 'w') as f:
-        chain_id = partners[0]['chain_id']
-        f.write(f"{mopac_keywords}\n\n\n")
-        for atom in partners:
-            cur_chain = atom['chain_id']
-            if atom['residue_name'] in ions:
-                f.write('TER\n')
-            elif chain_id != cur_chain:
-                f.write('TER\n')
-                chain_id = cur_chain           
-            if len(atom['atom_name']) == 3:
-                atom_name = f"{atom['atom_name']:>4s}"
-            else:
-                atom_name = f"{atom['atom_name']:^4s}"
-            f.write(
-                f"{atom['record_name']:<6s}"
-                f"{atom['atom_index']:>5d} "
-                f"{atom_name} "
-                f"{atom['residue_name']:<3s} "
-                f"{atom['chain_id']:1s}"
-                f"{atom['residue_number']:>4d}    "
-                f"{atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}"
-                f"{atom['occupancy']:6.2f}{atom['bfactor']:6.2f}           "
-                f"{atom['atom_type']:>2s}\n")
-    return outfile
-
 def write_pdb(partners, outfile):
     """
     """
     with open(outfile, 'w') as f:
-        chain_id = partners[0]['chain_id']
+        chain_id  = partners[0]['chain_id']
         for atom in partners:
             cur_chain = atom['chain_id']
-            if atom['residue_name'] in ions:
-                f.write('TER\n')
-            elif chain_id != cur_chain:
-                f.write('TER\n')
+            if chain_id != cur_chain:
                 chain_id = cur_chain
             f.write(
                 f"{atom['record_name']:<6s}"
@@ -588,7 +639,9 @@ def write_pdb(partners, outfile):
                 f"{atom['residue_number']:4d}    "
                 f"{atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}"
                 f"{atom['occupancy']:6.2f}{atom['bfactor']:6.2f}           "
-                f"{atom['atom_type']:>2s}\n")
+                f"{atom['atom_type']:>3s}\n")
+            if atom['residue_name'] in ions or atom['atom_name'] == 'OXT':
+                f.write('TER\n')
     return outfile
 
 def renumber_residues(pdb, outfile):
@@ -763,7 +816,7 @@ def processing_time(st):
 def configure_requirements():
     """
     """
-    mopac_exec   = '/opt/mopac/22.1.0/build/mopac'
+    mopac_exec   = '/opt/mopac/mopac-main/build/mopac'
     requirements = ['namd3', 'antechamber', 'cpptraj', 'parmchk2', 'obabel']
     for item in requirements:
         condition = istool(item)
@@ -815,7 +868,7 @@ if (__name__ == "__main__"):
     help='chain ID of the partner1 (e.g.: receptor)')
     mandatory.add_argument('--partner2', nargs=1, required=True, metavar='',
     help='chain ID of the partner2 or ligand ID (e.g.: ligand)')
-    mandatory.add_argument('--system_type', nargs=1, required=True, choices=['P:L', 'P:P'], default=['P:P'], metavar='',
+    mandatory.add_argument('--system_type', nargs=1, required=True, choices=['E:L', 'P:P'], default=['P:P'], metavar='',
     help='...')
 
     # opcionais
@@ -826,6 +879,8 @@ if (__name__ == "__main__"):
     parser.add_argument('--int_dist_cutoff', nargs=1, type=float, default=[4.5], metavar='',
     help=f'...')
     parser.add_argument('--lig_net_charge', nargs=1, type=int, default=[0], metavar='',
+    help=f'...')
+    parser.add_argument('--ionize', action='store_true',
     help=f'...')
     
     # finaliza configuração dos argumentos e variáveis
@@ -839,14 +894,15 @@ if (__name__ == "__main__"):
     mutant_list          = args.mut_list[0]
     int_dist_cutoff      = args.int_dist_cutoff[0]
     lig_net_charge       = args.lig_net_charge[0]
+    ionize               = args.ionize
     gap_dist_cutoff      = 16
     backbone             = ['N', 'CA', 'C', 'O']
-    ions                 = ['MG', 'CA', 'NA', 'CL', 'FE', 'K', 'ZN', 'MN']
+    ions                 = ['MG', 'CA', 'NA', 'Na+', 'CL', 'Cl-', 'FE', 'K', 'ZN', 'MN', 'BR', 'SE', 'AL', 'SB', 'BA', 'SI', 'BI', 'CU', 'AG', 'CO']
     output_name          = os.path.basename(pdb_file[:-4]).lower()
     output_dir           = f'{args.odir[0]}/outputs_qrasy/{output_name}'
     files_to_remove      = [
         f'{submit_dir}/data.lib',
-        f'{submit_dir}/leap.log',
+        f'{submit_dir}/leap.log',   
         f'{submit_dir}/sqm.in',
         f'{submit_dir}/sqm.out',
         f'{submit_dir}/sqm.pdb']
