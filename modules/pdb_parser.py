@@ -35,13 +35,11 @@ class PDBParser:
             'atom_type': str(line[66:].strip())
         }
         if atom_data['atom_type'] == '':
-            if atom_data['residue_name'] in ligands: atom_data['record_name'] = 'HETATM'
-            if atom_data['residue_name'] in ions: atom_data['record_name'] = 'HETATM'
-            if atom_data['atom_name'][0] == 'N': atom_data['atom_type'] = 'N'
-            if atom_data['atom_name'][0] == 'C': atom_data['atom_type'] = 'C'
-            if atom_data['atom_name'][0] == 'O': atom_data['atom_type'] = 'O'
-            if atom_data['atom_name'][0] == 'S': atom_data['atom_type'] = 'S'
-            if atom_data['atom_name'][0] == 'H': atom_data['atom_type'] = 'H'
+            if atom_data['atom_name'][0] ==  'N':  atom_data['atom_type'] =  'N'
+            if atom_data['atom_name'][0] ==  'C':  atom_data['atom_type'] =  'C'
+            if atom_data['atom_name'][0] ==  'O':  atom_data['atom_type'] =  'O'
+            if atom_data['atom_name'][0] ==  'S':  atom_data['atom_type'] =  'S'
+            if atom_data['atom_name'][0] ==  'H':  atom_data['atom_type'] =  'H'
         return atom_data
 
     def get_atoms(self):
